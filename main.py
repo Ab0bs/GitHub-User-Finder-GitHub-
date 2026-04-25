@@ -1,108 +1,90 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from api_client import GitHubAPIClient
-from favorites import FavoritesManager
+import requests
+import json
+import os
 
 class GitHubUserFinder:
     def __init__(self, root):
         self.root = root
         self.root.title("GitHub User Finder")
-        self.root.geometry("800x600")
+        self.favorites = self.load_favorites()
 
-        self.setup_ui()
+        # Поле ввода
+        self.search_label = ttk.Label(root, text="Введите имя пользователя GitHub:")
+        self.search_label.pack(pady=5)
+        self.search_entry = ttk.Entry(root, width=30)
+        self.search_entry.pack(pady=5)
 
-    def setup_ui(self):
-        # Поле поиска
-        search_frame = ttk.Frame(self.root)
-        search_frame.pack(pady=10, padx=20, fill='x')
-
-        ttk.Label(search_frame, text="Поиск пользователя:").pack(side='left')
-        self.search_entry = ttk.Entry(search_frame, width=40)
-        self.search_entry.pack(side='left', padx=5)
-        ttk.Button(search_frame, text="Найти", command=self.search_users).pack(side='left')
+        # Кнопка поиска
+        self.search_button = ttk.Button(root, text="Найти", command=self.search_user)
+        self.search_button.pack(pady=5)
 
         # Список результатов
-        results_frame = ttk.LabelFrame(self.root, text="Результаты поиска")
-        results_frame.pack(pady=10, padx=20, fill='both', expand=True)
+        self.results_list = tk.Listbox(root, width=50, height=10)
+        self.results_list.pack(pady=10)
 
-        columns = ('login', 'name', 'company', 'location')
-        self.tree = ttk.Treeview(results_frame, columns=columns, show='headings', height=15)
+        # Кнопка добавления в избранное
+        self.add_favorite_button = ttk.Button(root, text="Добавить в избранное", command=self.add_to_favorites)
+        self.add_favorite_button.pack(pady=5)
 
-        for col in columns:
-            self.tree.heading(col, text=col.capitalize())
-            self.tree.column(col, width=150)
+        # Список избранных
+        self.favorites_label = ttk.Label(root, text="Избранные пользователи:")
+        self.favorites_label.pack(pady=5)
+        self.favorites_list = tk.Listbox(root, width=50, height=5)
+        self.favorites_list.pack(pady=10)
+        self.update_favorites_list()
 
-        self.tree.pack(fill='both', expand=True, padx=10, pady=10)
-        self.tree.bind('<Double-1>', self.on_double_click)
-
-        # Кнопки избранного
-        fav_frame = ttk.Frame(self.root)
-        fav_frame.pack(pady=5, padx=20, fill='x')
-        ttk.Button(fav_frame, text="Добавить в избранное", command=self.add_to_favorites).pack(side='left', padx=5)
-        ttk.Button(fav_frame, text="Показать избранное", command=self.show_favorites).pack(side='left', padx=5)
-
-        # Область избранного
-        self.fav_listbox = tk.Listbox(self.root, height=8)
-        self.fav_listbox.pack(pady=10, padx=20, fill='x')
-
-    def search_users(self):
+    def search_user(self):
         username = self.search_entry.get().strip()
         if not username:
-            messagebox.showerror("Ошибка", "Поле поиска не может быть пустым!")
+            messagebox.showerror("Ошибка", "Поле поиска не должно быть пустым!")
             return
 
-        users, error = GitHubAPIClient.search_users(username)
-        if error:
-            messagebox.showerror("Ошибка API", error)
-            return
+        url = f"https://api.github.com/users/{username}"
+        response = requests.get(url)
 
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        for user in users[:10]:  # Ограничиваем 10 результатами
-            self.tree.insert('', 'end', values=(
-                user.get('login', ''),
-                user.get('name', ''),
-                user.get('company', ''),
-                user.get('location', '')
-            ))
-
-    def on_double_click(self, event):
-        selection = self.tree.selection()
-        if selection:
-            item = self.tree.item(selection[0])
-            values = item['values']
-            login = values[0]
-            name = values[1]
-            messagebox.showinfo("Информация", f"Логин: {login}\nИмя: {name}")
+        if response.status_code == 200:
+            user_data = response.json()
+            self.results_list.delete(0, tk.END)
+            self.results_list.insert(tk.END, f"Имя: {user_data.get('name', 'Не указано')}")
+            self.results_list.insert(tk.END, f"Логин: {user_data['login']}")
+            self.results_list.insert(tk.END, f"Публичные репозитории: {user_data['public_repos']}")
+            self.results_list.insert(tk.END, f"Подписчики: {user_data['followers']}")
+        else:
+            messagebox.showerror("Ошибка", "Пользователь не найден!")
 
     def add_to_favorites(self):
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("Предупреждение", "Выберите пользователя из списка!")
+        username = self.search_entry.get().strip()
+        if not username:
+            messagebox.showerror("Ошибка", "Поле поиска не должно быть пустым!")
             return
 
-        item = self.tree.item(selection[0])
-        values = item['values']
-        user_data = {
-            'login': values[0],
-            'name': values[1],
-            'company': values[2],
-            'location': values[3]
-        }
-
-        if FavoritesManager.add_favorite(user_data):
-            messagebox.showinfo("Успех", f"{values[0]} добавлен в избранное!")
+        if username not in self.favorites:
+            self.favorites.append(username)
+            self.save_favorites()
+            self.update_favorites_list()
+            messagebox.showinfo("Успех", f"{username} добавлен в избранное!")
         else:
-            messagebox.showwarning("Внимание", "Пользователь уже в избранном!")
+            messagebox.showwarning("Предупреждение", f"{username} уже в избранном!")
 
-    def show_favorites(self):
-        favorites = FavoritesManager.load_favorites()
-        self.fav_listbox.delete(0, tk.END)
-        for user in favorites:
-            self.fav_listbox.insert(tk.END, f"{user['login']} ({user.get('name', 'N/A')})")
+    def load_favorites(self):
+        if os.path.exists("favorites.json"):
+            with open("favorites.json", "r") as f:
+                return json.load(f)
+        return []
+
+    def save_favorites(self):
+        with open("favorites.json", "w") as f:
+            json.dump(self.favorites, f)
+
+    def update_favorites_list(self):
+        self.favorites_list.delete(0, tk.END)
+        for user in self.favorites:
+            self.favorites_list.insert(tk.END, user)
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = GitHubUserFinder(root)
     root.mainloop()
+
